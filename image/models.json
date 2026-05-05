@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://${LAN_IP}:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "models": [
+        { "id": "qwen3.6:35b-a3b" }
+      ]
+    }
+  }
+}
