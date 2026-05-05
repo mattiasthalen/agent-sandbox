@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "sbx-up: not yet implemented (Phase 1 stub)" >&2
+exit 0
