@@ -4,145 +4,19 @@
 
 **Goal:** Build a small personal repo that lets `sbx-up` (run from any project on the host Mac) drop the user into an sbx microVM where Pi can talk to Qwen served by host Ollama.
 
-**Architecture:** Two layers. Host: `make setup` installs deps via Homebrew, builds the sandbox image, and symlinks `sbx-up` into `~/.local/bin`. `sbx-up` discovers the host's LAN IP, ensures Ollama is running and bound to it, generates a per-invocation network policy, and launches `sbx run` with the workspace mounted and `LAN_IP` injected as an env var. Image: pre-baked Pi + superpowers + tools; entrypoint renders `models.json` from the env var on every boot and hash-gates `mise install` and an optional `.sbx/postCreate.sh`.
+**Architecture:** Two layers. Host: `make setup` installs deps via Homebrew, starts a local Docker registry on `localhost:5000`, builds and pushes the sandbox image, and symlinks `sbx-up` into `~/.local/bin`. `sbx-up` discovers the host's LAN IP, ensures Ollama is bound to it, ensures the qwen model is pulled, allows the LAN IP in the global sbx network policy, writes `${PWD}/.sbx/runtime.env` with the LAN IP, and `exec`s `sbx run --template localhost:5000/agent-sandbox:latest shell`. Image: layered on `docker/sandbox-templates:shell`, pre-baked with Pi + superpowers skills + a `setup.sh` sourced from `/etc/profile.d/` that reads `runtime.env`, renders `models.json`, and runs hash-gated `mise install` and `postCreate.sh`.
 
-**Tech Stack:** bash, make, Homebrew, sbx, Ollama, Docker (for the image), bats-core (for unit tests), mise.
+**Tech Stack:** bash, make, Homebrew, Docker (registry + image build), sbx, Ollama, bats-core, mise, Pi (npm).
 
-**Source spec:** `docs/superpowers/specs/2026-05-05-agent-sandbox-design.md`
+**Source spec:** `docs/superpowers/specs/2026-05-05-agent-sandbox-design.md` (revision v2 — post-Phase 0)
 
----
-
-## Phase 0: Resolve open questions
-
-The spec lists open questions that block several later tasks. Resolve them here, capture answers in a notes file, then proceed. Don't implement anything in this phase — just produce documentation.
-
-### Task 0.1: Create research notes scaffold
-
-**Files:**
-- Create: `docs/superpowers/notes/research-notes.md`
-
-- [ ] **Step 1: Create the notes file with empty sections**
-
-```markdown
-# agent-sandbox research notes
-
-Findings from Phase 0. Used by Phase 2 (image) and Phase 5 (entrypoint).
-
-## Pi install method
-TBD
-
-## Pi config and discovery paths
-- AGENTS.md location:
-- models.json location (or env var name):
-- superpowers skills discovery path:
-
-## sbx CLI surface
-- `sbx build` flags actually used:
-- `sbx run` flags actually used:
-- Policy file format and `--policy` flag name:
-- Workspace mount flag name:
-- Env var injection flag name:
-- How per-workspace state persistence is keyed (auto / explicit flag):
-
-## Ollama model tag
-- Exact tag for Qwen3.6-35B-A3B in the Ollama registry:
-- Approximate download size:
-
-## Base image choice
-- Selected: debian:slim or ubuntu:minimal
-- Reason:
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add docs/superpowers/notes/research-notes.md
-git commit -m "docs: scaffold Phase 0 research notes"
-```
-
-### Task 0.2: Resolve Pi install method and config paths
-
-**Files:**
-- Modify: `docs/superpowers/notes/research-notes.md`
-
-- [ ] **Step 1: Read `obra/superpowers` README and any install docs on GitHub**
-
-Look for: how Pi is installed (npm? release tarball? pipx? cargo?), what env vars or config files Pi reads to configure its model endpoint, where Pi looks for an `AGENTS.md`, and where Pi discovers skills.
-
-- [ ] **Step 2: Fill in the "Pi install method" and "Pi config and discovery paths" sections** with concrete answers
-
-Example shape (replace with real findings):
-
-```markdown
-## Pi install method
-`npm install -g @obra/pi` (verified from README @ <commit-sha>)
-
-## Pi config and discovery paths
-- AGENTS.md location: `~/.config/pi/AGENTS.md` (per docs)
-- models.json location: reads `PI_MODEL_ENDPOINT` env var if set, else `~/.config/pi/models.json`
-- superpowers skills discovery path: `~/.config/pi/skills/`
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add docs/superpowers/notes/research-notes.md
-git commit -m "docs: resolve Pi install and config research"
-```
-
-### Task 0.3: Resolve sbx CLI surface
-
-**Files:**
-- Modify: `docs/superpowers/notes/research-notes.md`
-
-- [ ] **Step 1: Run `sbx --help`, `sbx build --help`, `sbx run --help`**
-
-If `sbx` isn't installed yet on this machine, read its docs / repo README on the web instead. Do not install it as part of this task — that's Phase 1.
-
-- [ ] **Step 2: Fill in the "sbx CLI surface" section** with the actual flag names
-
-What we need to know:
-- The flag for naming/tagging an image at build (`-t`? `--tag`? `--name`?).
-- The flag for passing a network policy file at run (`--policy`? `--network-policy`?).
-- The flag for mounting a host directory into the VM (`--mount`? `--volume`? `-v`?).
-- The flag for injecting env vars (`--env`? `-e`?).
-- Whether per-workspace state is keyed automatically off the mount path or requires an explicit `--workspace-key` flag.
-- The expected policy file format (JSON? YAML? TOML?).
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add docs/superpowers/notes/research-notes.md
-git commit -m "docs: resolve sbx CLI surface research"
-```
-
-### Task 0.4: Resolve Ollama model tag and base image choice
-
-**Files:**
-- Modify: `docs/superpowers/notes/research-notes.md`
-
-- [ ] **Step 1: Look up the Qwen3.6-35B-A3B tag on `ollama.com/library`**
-
-Find the canonical tag string the user will pass to `ollama pull`. Note the approximate download size.
-
-- [ ] **Step 2: Pick a base image for the sandbox**
-
-Pick `debian:bookworm-slim` or `ubuntu:24.04` based on which makes the Pi install (from Task 0.2) simplest. If Pi is `npm install -g`, both work; pick the smaller one (`debian:bookworm-slim`). If Pi needs a specific glibc or system package only easily available on one, document why.
-
-- [ ] **Step 3: Fill in the "Ollama model tag" and "Base image choice" sections**
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add docs/superpowers/notes/research-notes.md
-git commit -m "docs: resolve model tag and base image research"
-```
+**Phase 0 outputs (already complete):** `docs/superpowers/notes/research-notes.md`
 
 ---
 
 ## Phase 1: Host setup (Brewfile + Makefile + sbx-up stub)
 
-End state of this phase: `make setup` runs cleanly on a fresh Mac, `which sbx-up` returns the symlink in `~/.local/bin/`, and running `sbx-up` prints a "not yet implemented" message and exits 0.
+End state: `make setup` runs cleanly on a fresh Mac, the local Docker registry is running on `localhost:5000`, `which sbx-up` returns the symlink in `~/.local/bin/`, and running `sbx-up` prints a "not yet implemented" message and exits 0.
 
 ### Task 1.1: Write the Brewfile
 
@@ -164,12 +38,17 @@ brew "uv"
 
 # Test framework for the sbx-up bash logic.
 brew "bats-core"
+
+# Docker is needed for `docker build --push localhost:5000/...`. If you
+# already have Docker Desktop installed via the .dmg, this brew line is a
+# no-op; if you prefer colima, swap to `brew "colima"` plus `brew "docker"`.
+brew "docker"
 ```
 
 - [ ] **Step 2: Verify it parses**
 
 Run: `brew bundle check --file=Brewfile || true`
-Expected: either reports missing items (most will be missing on a fresh checkout) or "all dependencies are satisfied". Either is fine — we just want no syntax errors.
+Expected: either reports missing items or "all dependencies are satisfied". Either is fine — we just want no syntax errors.
 
 - [ ] **Step 3: Commit**
 
@@ -200,8 +79,7 @@ Run: `chmod +x bin/sbx-up`
 - [ ] **Step 3: Verify it runs**
 
 Run: `./bin/sbx-up`
-Expected stderr: `sbx-up: not yet implemented (Phase 1 stub)`
-Expected exit code: 0
+Expected stderr: `sbx-up: not yet implemented (Phase 1 stub)`. Exit code 0.
 
 - [ ] **Step 4: Commit**
 
@@ -222,19 +100,28 @@ git commit -m "feat: add sbx-up stub"
 
 REPO := $(shell pwd)
 LOCAL_BIN := $(HOME)/.local/bin
-CONFIG_DIR := $(HOME)/.config/agent-sandbox
 CACHE_DIR := $(HOME)/.cache/agent-sandbox
+REGISTRY_NAME := agent-sandbox-registry
+IMAGE := localhost:5000/agent-sandbox:latest
 
 setup:
 	@echo "==> brew bundle"
 	brew bundle --file=$(REPO)/Brewfile
 
-	@echo "==> sbx build"
-	sbx build -t agent-sandbox $(REPO)/image/
+	@echo "==> local Docker registry"
+	@if [ -z "$$(docker ps -aqf name=^$(REGISTRY_NAME)$$)" ]; then \
+	  docker run -d --restart=always -p 127.0.0.1:5000:5000 --name $(REGISTRY_NAME) registry:2 ; \
+	elif [ -z "$$(docker ps -qf name=^$(REGISTRY_NAME)$$)" ]; then \
+	  docker start $(REGISTRY_NAME) ; \
+	else \
+	  echo "registry already running" ; \
+	fi
 
-	@echo "==> host config dirs"
-	mkdir -p $(CONFIG_DIR) $(CACHE_DIR)
-	cp $(REPO)/policy/network.tmpl $(CONFIG_DIR)/network.tmpl
+	@echo "==> docker build --push $(IMAGE)"
+	docker build -t $(IMAGE) --push $(REPO)/image/
+
+	@echo "==> host cache dir"
+	mkdir -p $(CACHE_DIR)
 
 	@echo "==> install sbx-up symlink"
 	mkdir -p $(LOCAL_BIN)
@@ -242,31 +129,37 @@ setup:
 
 	@echo
 	@if echo "$$PATH" | tr ':' '\n' | grep -qx "$(LOCAL_BIN)"; then \
-		echo "✓ sbx-up installed at $(LOCAL_BIN)/sbx-up"; \
+	  echo "✓ sbx-up installed at $(LOCAL_BIN)/sbx-up"; \
 	else \
-		echo "sbx-up installed at $(LOCAL_BIN)/sbx-up"; \
-		echo "Add this to your shell rc to put it on PATH:"; \
-		echo "  export PATH=\"$$HOME/.local/bin:$$PATH\""; \
+	  echo "sbx-up installed at $(LOCAL_BIN)/sbx-up"; \
+	  echo "Add this to your shell rc to put it on PATH:"; \
+	  echo "  export PATH=\"$$HOME/.local/bin:$$PATH\""; \
 	fi
 ```
 
-Note: the `sbx build` and `cp policy/network.tmpl` lines reference files that don't exist yet (Phases 2 and 4). That's deliberate — `make setup` is the integration point. We'll add the missing pieces in later phases. The stub `sbx-up` is enough to verify the symlink + PATH check work.
+Note: the `docker build --push` step references `image/` which doesn't exist yet. We'll comment that out and re-enable in Phase 2.
 
 - [ ] **Step 2: Temporarily comment out the steps that depend on later phases**
-
-Edit the Makefile to comment out `brew bundle` (depends on tools being present), `sbx build` (no Dockerfile yet), and the `cp policy/network.tmpl` line (no template yet):
 
 ```make
 setup:
 	# @echo "==> brew bundle"
 	# brew bundle --file=$(REPO)/Brewfile
 
-	# @echo "==> sbx build"
-	# sbx build -t agent-sandbox $(REPO)/image/
+	# @echo "==> local Docker registry"
+	# @if [ -z "$$(docker ps -aqf name=^$(REGISTRY_NAME)$$)" ]; then \
+	#   docker run -d --restart=always -p 127.0.0.1:5000:5000 --name $(REGISTRY_NAME) registry:2 ; \
+	# elif [ -z "$$(docker ps -qf name=^$(REGISTRY_NAME)$$)" ]; then \
+	#   docker start $(REGISTRY_NAME) ; \
+	# else \
+	#   echo "registry already running" ; \
+	# fi
 
-	@echo "==> host config dirs"
-	mkdir -p $(CONFIG_DIR) $(CACHE_DIR)
-	# cp $(REPO)/policy/network.tmpl $(CONFIG_DIR)/network.tmpl
+	# @echo "==> docker build --push $(IMAGE)"
+	# docker build -t $(IMAGE) --push $(REPO)/image/
+
+	@echo "==> host cache dir"
+	mkdir -p $(CACHE_DIR)
 
 	@echo "==> install sbx-up symlink"
 	mkdir -p $(LOCAL_BIN)
@@ -274,99 +167,92 @@ setup:
 
 	@echo
 	@if echo "$$PATH" | tr ':' '\n' | grep -qx "$(LOCAL_BIN)"; then \
-		echo "✓ sbx-up installed at $(LOCAL_BIN)/sbx-up"; \
+	  echo "✓ sbx-up installed at $(LOCAL_BIN)/sbx-up"; \
 	else \
-		echo "sbx-up installed at $(LOCAL_BIN)/sbx-up"; \
-		echo "Add this to your shell rc to put it on PATH:"; \
-		echo "  export PATH=\"$$HOME/.local/bin:$$PATH\""; \
+	  echo "sbx-up installed at $(LOCAL_BIN)/sbx-up"; \
+	  echo "Add this to your shell rc to put it on PATH:"; \
+	  echo "  export PATH=\"$$HOME/.local/bin:$$PATH\""; \
 	fi
 ```
-
-We'll un-comment these lines in the phase that adds each dependency.
 
 - [ ] **Step 3: Run setup**
 
 Run: `make setup`
-Expected: creates `~/.config/agent-sandbox/`, `~/.cache/agent-sandbox/`, `~/.local/bin/sbx-up` (symlink to repo). Prints either `✓ sbx-up installed` or the PATH-add hint.
+Expected: creates `~/.cache/agent-sandbox/`, `~/.local/bin/sbx-up` (symlink). Prints either `✓ sbx-up installed` or the PATH-add hint.
 
-- [ ] **Step 4: Verify symlink and PATH**
+- [ ] **Step 4: Verify symlink**
 
 Run: `ls -la ~/.local/bin/sbx-up`
-Expected: `~/.local/bin/sbx-up -> <repo>/bin/sbx-up`
+Expected: `~/.local/bin/sbx-up -> <repo>/bin/sbx-up`.
 
 If `~/.local/bin` is on PATH:
 Run: `sbx-up`
-Expected stderr: `sbx-up: not yet implemented (Phase 1 stub)`
-
-If not on PATH, add the printed line to your shell rc, open a new shell, then verify.
+Expected stderr: `sbx-up: not yet implemented (Phase 1 stub)`.
 
 - [ ] **Step 5: Verify idempotency**
 
-Run: `make setup` a second time
-Expected: same output, no errors, `ln -sf` overwrites cleanly.
+Run: `make setup` again.
+Expected: same output, no errors.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add Makefile
-git commit -m "feat: add Makefile setup target with sbx-up symlink and PATH check"
+git commit -m "feat: add Makefile setup target"
 ```
 
-### Task 1.4: Re-enable brew bundle in Makefile
+### Task 1.4: Re-enable brew bundle and registry start
 
 **Files:**
 - Modify: `Makefile`
 
-- [ ] **Step 1: Un-comment the `brew bundle` lines**
+- [ ] **Step 1: Un-comment `brew bundle` and the registry block**
 
-Change:
-```make
-	# @echo "==> brew bundle"
-	# brew bundle --file=$(REPO)/Brewfile
-```
-to:
-```make
-	@echo "==> brew bundle"
-	brew bundle --file=$(REPO)/Brewfile
-```
+Replace the four commented sections (`brew bundle` and `local Docker registry`) with their uncommented versions from Task 1.3 Step 1. Leave the `docker build --push` step commented out — that's still Phase 2's job.
 
 - [ ] **Step 2: Run setup**
 
 Run: `make setup`
-Expected: `brew bundle` runs, installs anything from `Brewfile` not yet present (ollama, sbx, mise, gh, jq, uv, bats-core). Subsequent runs are fast no-ops.
+Expected: `brew bundle` installs anything missing. Local registry container starts on `localhost:5000`.
 
-- [ ] **Step 3: Verify all tools present**
+- [ ] **Step 3: Verify registry**
 
-Run: `which ollama sbx mise gh jq uv bats`
+Run: `curl -fsS http://localhost:5000/v2/_catalog`
+Expected: `{"repositories":[]}`.
+
+Run: `docker ps --filter name=agent-sandbox-registry`
+Expected: one running container.
+
+- [ ] **Step 4: Verify all tools present**
+
+Run: `which ollama sbx mise gh jq uv bats docker`
 Expected: a path printed for each.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add Makefile
-git commit -m "feat: enable brew bundle in make setup"
+git commit -m "feat: enable brew bundle and local Docker registry"
 ```
 
 ---
 
 ## Phase 2: Sandbox image
 
-End state: `sbx build -t agent-sandbox image/` succeeds. `sbx run --image agent-sandbox -- bash -c 'pi --version && mise --version && uv --version && git --version && rg --version'` prints versions for all tools.
+End state: `docker build -t localhost:5000/agent-sandbox:latest --push image/` succeeds. The image extends `docker/sandbox-templates:shell` and pre-installs Pi, mise, uv, gh, ripgrep, jq, plus the baked-in AGENTS.md, models.json template, and setup.sh.
 
-Tasks in this phase use the answers from Phase 0 (Pi install method, base image, AGENTS.md path, models.json path).
-
-### Task 2.1: Write minimal Dockerfile (base + system tools)
+### Task 2.1: Write minimal Dockerfile (base + apt deps)
 
 **Files:**
 - Create: `image/Dockerfile`
 
 - [ ] **Step 1: Write the Dockerfile**
 
-Use the base image chosen in Task 0.4. This example uses `debian:bookworm-slim`; substitute if you chose differently.
-
 ```dockerfile
 # syntax=docker/dockerfile:1.6
-FROM debian:bookworm-slim
+FROM docker/sandbox-templates:shell
+
+USER root
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -377,39 +263,45 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       gnupg \
       jq \
       ripgrep \
-      bash \
-      zsh \
       gettext-base \
+      nodejs \
+      npm \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-`gettext-base` is for `envsubst`, used later in the entrypoint.
+`gettext-base` provides `envsubst` (used by `setup.sh` to render `models.json`).
 
-- [ ] **Step 2: Verify it builds**
+If `nodejs` from Debian apt is too old for Pi (Pi may need Node 20+), swap to NodeSource:
 
-Run: `sbx build -t agent-sandbox image/` (use the actual `sbx build` flags from Task 0.3 if they differ from `-t`)
-Expected: image builds successfully.
+```dockerfile
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+```
 
-- [ ] **Step 3: Verify tools present**
+- [ ] **Step 2: Verify it builds (without push)**
 
-Run: `sbx run --image agent-sandbox -- bash -c 'git --version && rg --version && jq --version'` (use actual `sbx run` flags from Task 0.3)
-Expected: versions print for git, rg, jq. Exit 0.
+Run: `docker build -t localhost:5000/agent-sandbox:latest image/`
+Expected: builds successfully.
+
+- [ ] **Step 3: Smoke-test tools inside the image**
+
+Run: `docker run --rm localhost:5000/agent-sandbox:latest bash -c 'git --version && rg --version && jq --version && envsubst --version'`
+Expected: versions print for each. Exit 0.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add image/Dockerfile
-git commit -m "feat: add minimal sandbox image with base tooling"
+git commit -m "feat: minimal sandbox image extending docker/sandbox-templates:shell"
 ```
 
-### Task 2.2: Add mise and uv to image
+### Task 2.2: Add mise and uv
 
 **Files:**
 - Modify: `image/Dockerfile`
 
-- [ ] **Step 1: Add mise and uv install steps**
-
-Append to the Dockerfile after the apt-get block:
+- [ ] **Step 1: Append mise and uv installs**
 
 ```dockerfile
 # mise (per https://mise.jdx.dev install instructions)
@@ -421,33 +313,27 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/
 ```
 
-If the install scripts above have moved or changed at impl time, use the canonical install command from each tool's current docs.
+If the install scripts have moved or changed at impl time, use the canonical command from each tool's current docs.
 
-- [ ] **Step 2: Rebuild image**
+- [ ] **Step 2: Rebuild and verify**
 
-Run: `sbx build -t agent-sandbox image/`
-Expected: builds successfully.
-
-- [ ] **Step 3: Verify mise and uv present**
-
-Run: `sbx run --image agent-sandbox -- bash -c 'mise --version && uv --version'`
+Run: `docker build -t localhost:5000/agent-sandbox:latest image/`
+Run: `docker run --rm localhost:5000/agent-sandbox:latest bash -c 'mise --version && uv --version'`
 Expected: both versions print.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add image/Dockerfile
-git commit -m "feat: install mise and uv in sandbox image"
+git commit -m "feat: install mise and uv in image"
 ```
 
-### Task 2.3: Add gh CLI to image
+### Task 2.3: Add gh
 
 **Files:**
 - Modify: `image/Dockerfile`
 
-- [ ] **Step 1: Add gh install step**
-
-Append (use the official gh apt repo install):
+- [ ] **Step 1: Append gh install**
 
 ```dockerfile
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -462,86 +348,61 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 
 - [ ] **Step 2: Rebuild and verify**
 
-Run: `sbx build -t agent-sandbox image/`
-Run: `sbx run --image agent-sandbox -- gh --version`
+Run: `docker build -t localhost:5000/agent-sandbox:latest image/`
+Run: `docker run --rm localhost:5000/agent-sandbox:latest gh --version`
 Expected: gh version prints.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add image/Dockerfile
-git commit -m "feat: install gh CLI in sandbox image"
+git commit -m "feat: install gh CLI in image"
 ```
 
-### Task 2.4: Add Pi to image
+### Task 2.4: Install Pi globally
 
 **Files:**
 - Modify: `image/Dockerfile`
 
-- [ ] **Step 1: Add Pi install step using the method from Task 0.2**
+- [ ] **Step 1: Append Pi install**
 
-Use the verified install command from `docs/superpowers/notes/research-notes.md`. Example shapes:
-
-If Pi is npm-based:
 ```dockerfile
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @obra/pi
+RUN npm install -g @mariozechner/pi-coding-agent
 ```
-
-If Pi is a release tarball:
-```dockerfile
-RUN curl -fsSL -o /tmp/pi.tar.gz https://github.com/obra/pi/releases/latest/download/pi-linux-x86_64.tar.gz \
-    && tar -xzf /tmp/pi.tar.gz -C /usr/local/bin pi \
-    && rm /tmp/pi.tar.gz \
-    && chmod +x /usr/local/bin/pi
-```
-
-If Pi is pipx-based:
-```dockerfile
-RUN apt-get update && apt-get install -y --no-install-recommends pipx \
-    && rm -rf /var/lib/apt/lists/* \
-    && PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install obra-pi
-```
-
-Use the actual install command from your research notes.
 
 - [ ] **Step 2: Rebuild and verify**
 
-Run: `sbx build -t agent-sandbox image/`
-Run: `sbx run --image agent-sandbox -- pi --version` (or `pi --help` if `--version` is unsupported)
-Expected: prints version or help text. Exit 0.
+Run: `docker build -t localhost:5000/agent-sandbox:latest image/`
+Run: `docker run --rm localhost:5000/agent-sandbox:latest pi --help`
+Expected: Pi help text. Exit 0.
+
+If `pi --help` fails because Pi insists on a config file or model setup before printing help, try `which pi`:
+Run: `docker run --rm localhost:5000/agent-sandbox:latest which pi`
+Expected: a path to the binary.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add image/Dockerfile
-git commit -m "feat: install Pi in sandbox image"
+git commit -m "feat: install Pi (npm: @mariozechner/pi-coding-agent)"
 ```
 
-### Task 2.5: Add superpowers skills to image
+### Task 2.5: Clone obra/superpowers
 
 **Files:**
 - Modify: `image/Dockerfile`
 
-- [ ] **Step 1: Clone obra/superpowers into the path Pi expects**
-
-Use the path from Task 0.2's research. Example assumes Pi reads from `~/.config/pi/skills/`:
+- [ ] **Step 1: Append the clone**
 
 ```dockerfile
-RUN git clone --depth 1 https://github.com/obra/superpowers.git /etc/agent-sandbox/superpowers \
-    && mkdir -p /root/.config/pi \
-    && ln -s /etc/agent-sandbox/superpowers /root/.config/pi/skills
+RUN git clone --depth 1 https://github.com/obra/superpowers.git /etc/agent-sandbox/superpowers
 ```
-
-Adjust the link target to match the path Pi actually expects, per your notes.
 
 - [ ] **Step 2: Rebuild and verify**
 
-Run: `sbx build -t agent-sandbox image/`
-Run: `sbx run --image agent-sandbox -- bash -c 'ls /root/.config/pi/skills/ | head -5'`
-Expected: lists some directories from `obra/superpowers` (e.g. `brainstorming`, `writing-plans`).
+Run: `docker build -t localhost:5000/agent-sandbox:latest image/`
+Run: `docker run --rm localhost:5000/agent-sandbox:latest bash -c 'ls /etc/agent-sandbox/superpowers/skills 2>/dev/null | head -5 || ls /etc/agent-sandbox/superpowers | head -5'`
+Expected: a list of directories from the superpowers repo.
 
 - [ ] **Step 3: Commit**
 
@@ -550,12 +411,11 @@ git add image/Dockerfile
 git commit -m "feat: clone obra/superpowers into image"
 ```
 
-### Task 2.6: Bake AGENTS.md and models.json template into image
+### Task 2.6: Write AGENTS.md and models.json template
 
 **Files:**
 - Create: `image/AGENTS.md`
 - Create: `image/models.json`
-- Modify: `image/Dockerfile`
 
 - [ ] **Step 1: Write `image/AGENTS.md`**
 
@@ -566,127 +426,254 @@ You are running inside an sbx microVM on the user's Mac.
 
 ## Model
 
-Your model is served by Ollama on the host at `http://${LAN_IP}:11434`.
-The exact model tag is configured in `models.json`. The host is reached over
-the LAN (loopback inside the VM does not route to the host), so `${LAN_IP}` is
-the host's current Wi-Fi or Ethernet IP, regenerated on every sandbox launch.
+Your model is served by Ollama on the host at `http://${LAN_IP}:11434/v1`
+(Ollama's OpenAI-compatible endpoint; see `~/.pi/agent/models.json`).
+
+The host is reached over the LAN — loopback inside the VM does not route to
+the host, so `${LAN_IP}` is the host's current Wi-Fi or Ethernet IP. It's
+written to `/workspace/.sbx/runtime.env` by `sbx-up` and rendered into
+`models.json` by `setup.sh` on every shell startup.
 
 ## Sandbox semantics
 
-- This VM is the safety boundary. You may run any shell command without asking
-  the user for permission. You will not damage the host.
-- `/workspace` is the user's project, mounted read-write from the host. Edits
-  there modify the user's real files.
+- This VM is the safety boundary. You may run any shell command without
+  asking the user for permission. You will not damage the host.
+- `/workspace` is the user's project, mounted bidirectionally from the host.
+  Edits there modify the user's real files.
 - The rest of the filesystem is per-workspace persistent state. Anything you
   install or write outside `/workspace` survives across `sbx-up` invocations
   for this project, but is isolated from other projects.
 
 ## Network
 
-Outbound network is restricted by policy. Allowed:
-- The model endpoint (`${LAN_IP}:11434`)
-- A small allowlist of package registries (npm, PyPI, GitHub, ghcr.io)
+Outbound network is restricted by the global sbx policy. The model endpoint
+(`${LAN_IP}:11434`) is allowed; common dev sites (npm, PyPI, GitHub) are
+allowed by sbx's "Balanced" default.
 
-Other hosts will refuse the connection. If you need a host added, ask the user
-to update `policy/network.tmpl` in the agent-sandbox repo.
+If you need a host added, ask the user to run `sbx policy allow network <host>`
+on the Mac.
 ```
 
-- [ ] **Step 2: Write `image/models.json`**
-
-The exact shape depends on Pi's config schema (Task 0.2). If Pi reads `models.json`, write the template using `${LAN_IP}` as a literal placeholder for `envsubst`:
+- [ ] **Step 2: Write `image/models.json` (template)**
 
 ```json
 {
-  "default": "qwen3.6",
-  "models": {
-    "qwen3.6": {
-      "provider": "ollama",
-      "endpoint": "http://${LAN_IP}:11434",
-      "model": "qwen3.6:35b-a3b"
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://${LAN_IP}:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "models": [
+        { "id": "qwen3.6:35b-a3b" }
+      ]
     }
   }
 }
 ```
 
-Replace the `model` value with the exact tag from your Task 0.4 research. Adjust the schema if Pi expects a different shape.
-
-If your Task 0.2 research shows Pi reads `PI_MODEL_ENDPOINT` instead of a JSON file, skip writing `models.json` — the env var path is simpler. Document this decision in the notes file and proceed with that approach in subsequent tasks.
-
-- [ ] **Step 3: Add COPY directives to Dockerfile**
-
-Append to `image/Dockerfile`. Adjust target paths to match Pi's expectations from Task 0.2.
-
-```dockerfile
-COPY AGENTS.md /root/.config/pi/AGENTS.md
-COPY models.json /etc/agent-sandbox/models.json.tmpl
-```
-
-(The `.tmpl` suffix is intentional — the entrypoint will `envsubst` it into `~/.config/pi/models.json` at boot.)
-
-- [ ] **Step 4: Rebuild and verify**
-
-Run: `sbx build -t agent-sandbox image/`
-Run: `sbx run --image agent-sandbox -- bash -c 'cat /root/.config/pi/AGENTS.md | head -3 && cat /etc/agent-sandbox/models.json.tmpl'`
-Expected: prints first lines of AGENTS.md and the full models.json.tmpl content (still containing `${LAN_IP}` placeholder).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add image/AGENTS.md image/models.json image/Dockerfile
-git commit -m "feat: bake AGENTS.md and models.json template into image"
-```
-
-### Task 2.7: Re-enable sbx build in Makefile
-
-**Files:**
-- Modify: `Makefile`
-
-- [ ] **Step 1: Un-comment the `sbx build` lines**
-
-Change:
-```make
-	# @echo "==> sbx build"
-	# sbx build -t agent-sandbox $(REPO)/image/
-```
-to:
-```make
-	@echo "==> sbx build"
-	sbx build -t agent-sandbox $(REPO)/image/
-```
-
-- [ ] **Step 2: Verify**
-
-Run: `make setup`
-Expected: brew bundle is a no-op, sbx build is fast (cached layers), config dirs exist, symlink in place.
+Replace the model `id` with the exact tag from `docs/superpowers/notes/research-notes.md` once Phase 0's "Ollama model tag" section is filled in. As of writing it's still TBD.
 
 - [ ] **Step 3: Commit**
 
 ```bash
+git add image/AGENTS.md image/models.json
+git commit -m "feat: bake AGENTS.md and models.json template"
+```
+
+### Task 2.7: Wire AGENTS.md/models.json into the Dockerfile
+
+**Files:**
+- Modify: `image/Dockerfile`
+
+- [ ] **Step 1: Append COPY directives and per-user setup**
+
+```dockerfile
+# Baked-in agent config
+COPY AGENTS.md /etc/agent-sandbox/AGENTS.md
+COPY models.json /etc/agent-sandbox/models.json.tmpl
+
+# Switch to the sandbox-templates default user. Confirm via `id` inside the
+# base image: it's typically `agent` (uid 1000). If different, change here.
+USER agent
+
+RUN mkdir -p /home/agent/.pi/agent \
+    && ln -s /etc/agent-sandbox/AGENTS.md /home/agent/.pi/agent/AGENTS.md \
+    && ln -s /etc/agent-sandbox/superpowers /home/agent/.pi/agent/skills
+
+USER root
+```
+
+If the base image's user is not `agent`, run `docker run --rm docker/sandbox-templates:shell id` first to find the correct username and uid, and substitute throughout.
+
+- [ ] **Step 2: Rebuild and verify**
+
+Run: `docker build -t localhost:5000/agent-sandbox:latest image/`
+Run: `docker run --rm localhost:5000/agent-sandbox:latest bash -c 'cat /etc/agent-sandbox/AGENTS.md | head -3 && cat /etc/agent-sandbox/models.json.tmpl'`
+Expected: the AGENTS.md preamble, then the models.json with `${LAN_IP}` placeholder intact.
+
+Run: `docker run --rm --user agent localhost:5000/agent-sandbox:latest bash -c 'readlink /home/agent/.pi/agent/AGENTS.md'`
+Expected: `/etc/agent-sandbox/AGENTS.md`.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add image/Dockerfile
+git commit -m "feat: bake AGENTS.md, models.json template, skills symlinks into image"
+```
+
+### Task 2.8: Write setup.sh and wire it via /etc/profile.d
+
+**Files:**
+- Create: `image/setup.sh`
+- Modify: `image/Dockerfile`
+
+- [ ] **Step 1: Write a minimal `setup.sh` that just renders models.json**
+
+We'll add hash-gated mise + postCreate in Phase 5. For now just the basics, with a sourceable structure.
+
+```bash
+#!/usr/bin/env bash
+# Sourced from /etc/profile.d/agent-sandbox.sh on every shell startup.
+# DO NOT add `set -e` here — we're sourced, not executed; an error must not
+# kill the user's interactive shell.
+
+if [[ -n "${SBX_SETUP_DONE:-}" ]]; then
+  return 0
+fi
+export SBX_SETUP_DONE=1
+
+STATE_DIR="${HOME}/.sandbox"
+mkdir -p "$STATE_DIR"
+
+# Load LAN_IP from workspace runtime file written by host's sbx-up.
+if [[ -f /workspace/.sbx/runtime.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . /workspace/.sbx/runtime.env
+  set +a
+fi
+
+if [[ -z "${LAN_IP:-}" ]]; then
+  echo "agent-sandbox: LAN_IP not set; Pi cannot reach the model." >&2
+  echo "agent-sandbox: did sbx-up write /workspace/.sbx/runtime.env?" >&2
+  return 0
+fi
+
+# Render Pi's models.json with the current LAN_IP.
+if [[ -f /etc/agent-sandbox/models.json.tmpl ]]; then
+  mkdir -p "${HOME}/.pi/agent"
+  envsubst < /etc/agent-sandbox/models.json.tmpl > "${HOME}/.pi/agent/models.json"
+fi
+```
+
+- [ ] **Step 2: Append to Dockerfile**
+
+```dockerfile
+COPY setup.sh /etc/agent-sandbox/setup.sh
+RUN chmod +x /etc/agent-sandbox/setup.sh \
+    && printf '#!/usr/bin/env bash\nsource /etc/agent-sandbox/setup.sh\n' \
+       > /etc/profile.d/agent-sandbox.sh \
+    && chmod +x /etc/profile.d/agent-sandbox.sh
+```
+
+If the base image uses a non-bash login shell that doesn't read `/etc/profile.d/*.sh`, fall back to appending to `/home/agent/.bashrc`:
+
+```dockerfile
+RUN echo 'source /etc/agent-sandbox/setup.sh' >> /home/agent/.bashrc
+```
+
+- [ ] **Step 3: Rebuild**
+
+Run: `docker build -t localhost:5000/agent-sandbox:latest image/`
+Expected: builds successfully.
+
+- [ ] **Step 4: Smoke-test setup.sh by sourcing it manually**
+
+Run:
+```bash
+docker run --rm --user agent \
+  -e HOME=/home/agent \
+  -v /tmp:/workspace \
+  localhost:5000/agent-sandbox:latest \
+  bash -c 'mkdir -p /workspace/.sbx && echo "LAN_IP=10.0.0.1" > /workspace/.sbx/runtime.env && bash -l -c "cat ~/.pi/agent/models.json"'
+```
+Expected: `models.json` content with `${LAN_IP}` replaced by `10.0.0.1`. (The `bash -l` triggers profile.d sourcing.)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add image/setup.sh image/Dockerfile
+git commit -m "feat: add setup.sh and wire via /etc/profile.d"
+```
+
+### Task 2.9: Push to the local registry
+
+**Files:**
+- (None — Makefile already has the push step gated by Phase 1.4 commenting)
+
+- [ ] **Step 1: Re-enable `docker build --push` in Makefile**
+
+Replace:
+```make
+	# @echo "==> docker build --push $(IMAGE)"
+	# docker build -t $(IMAGE) --push $(REPO)/image/
+```
+with:
+```make
+	@echo "==> docker build --push $(IMAGE)"
+	docker build -t $(IMAGE) --push $(REPO)/image/
+```
+
+- [ ] **Step 2: Run setup**
+
+Run: `make setup`
+Expected: image is pushed to `localhost:5000`.
+
+- [ ] **Step 3: Verify in the registry**
+
+Run: `curl -fsS http://localhost:5000/v2/_catalog`
+Expected: `{"repositories":["agent-sandbox"]}`.
+
+Run: `curl -fsS http://localhost:5000/v2/agent-sandbox/tags/list`
+Expected: `{"name":"agent-sandbox","tags":["latest"]}`.
+
+- [ ] **Step 4: Verify sbx can pull and run**
+
+Run (this is the first real sbx invocation, so `sbx login` must already be done):
+```bash
+cd /tmp && mkdir -p sbx-image-test && cd sbx-image-test
+sbx run --template localhost:5000/agent-sandbox:latest shell -- bash -c 'pi --help && exit 0'
+```
+Expected: drops into the VM, prints Pi help, exits. The command-form may differ; if `--` is unsupported, run interactively and verify by hand.
+
+- [ ] **Step 5: Commit**
+
+```bash
 git add Makefile
-git commit -m "feat: enable sbx build in make setup"
+git commit -m "feat: enable docker build --push in make setup"
 ```
 
 ---
 
 ## Phase 3: sbx-up — Ollama and LAN IP
 
-End state: running `sbx-up` (still without the `sbx run` invocation at the end) discovers the LAN IP, ensures Ollama is up on it, and ensures the model is pulled. Bats tests cover the pure functions.
+End state: `sbx-up` (still without the sbx-policy/sbx-run steps at the end) discovers the LAN IP, ensures Ollama is up on it, and ensures the model is pulled. Bats tests cover the pure functions.
 
 ### Task 3.1: Restructure sbx-up into testable functions
 
 **Files:**
 - Modify: `bin/sbx-up`
 
-- [ ] **Step 1: Replace the stub with the function skeleton**
+- [ ] **Step 1: Replace the stub**
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Constants. Edit here if you ever need to change them.
+# Constants. Edit here to change them.
 MODEL_TAG="qwen3.6:35b-a3b"   # confirm exact tag from research-notes.md
 OLLAMA_PORT=11434
-CONFIG_DIR="${HOME}/.config/agent-sandbox"
+IMAGE="localhost:5000/agent-sandbox:latest"
 CACHE_DIR="${HOME}/.cache/agent-sandbox"
 
 discover_lan_ip() {
@@ -718,7 +705,7 @@ ensure_model() {
   if ollama list | awk 'NR>1 {print $1}' | grep -qx "$MODEL_TAG"; then
     return 0
   fi
-  echo "First run — pulling $MODEL_TAG (large download, ~22GB)…" >&2
+  echo "First run — pulling $MODEL_TAG (large download)…" >&2
   ollama pull "$MODEL_TAG"
 }
 
@@ -740,7 +727,7 @@ main() {
 
   ensure_model
 
-  echo "OK so far (sandbox launch added in Phase 4)" >&2
+  echo "OK so far (sbx policy + sandbox launch added in Phase 4)" >&2
 }
 
 # Allow sourcing for tests without running main.
@@ -761,12 +748,12 @@ git add bin/sbx-up
 git commit -m "feat: restructure sbx-up into testable functions"
 ```
 
-### Task 3.2: Write bats test for discover_lan_ip
+### Task 3.2: Bats tests for discover_lan_ip
 
 **Files:**
 - Create: `tests/sbx-up.bats`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 ```bash
 #!/usr/bin/env bats
@@ -814,26 +801,24 @@ setup() {
 }
 ```
 
-- [ ] **Step 2: Run tests, verify they fail in a meaningful way**
+- [ ] **Step 2: Run tests**
 
 Run: `bats tests/sbx-up.bats`
-Expected: tests run. They may pass on macOS where `ipconfig` exists (the function override may not take effect because `set -e` in the sourced script stops execution). If they fail, that's fine — we have a working test harness.
-
-If the script fails to source because `main "$@"` runs with no args: confirm the `BASH_SOURCE`-vs-`$0` guard at the bottom is working. Bats sources the script, so `BASH_SOURCE[0]` differs from `$0` (which is bats), so `main` should not run.
+Expected: tests pass.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add tests/sbx-up.bats
-git commit -m "test: add bats tests for discover_lan_ip"
+git commit -m "test: bats tests for discover_lan_ip"
 ```
 
-### Task 3.3: Test ollama_is_up
+### Task 3.3: Bats tests for ollama_is_up
 
 **Files:**
 - Modify: `tests/sbx-up.bats`
 
-- [ ] **Step 1: Append tests for ollama_is_up**
+- [ ] **Step 1: Append tests**
 
 ```bash
 @test "ollama_is_up returns 0 when curl succeeds" {
@@ -856,180 +841,107 @@ git commit -m "test: add bats tests for discover_lan_ip"
 - [ ] **Step 2: Run tests**
 
 Run: `bats tests/sbx-up.bats`
-Expected: all tests pass.
+Expected: 5 tests pass.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add tests/sbx-up.bats
-git commit -m "test: add bats tests for ollama_is_up"
+git commit -m "test: bats tests for ollama_is_up"
 ```
 
-### Task 3.4: Manual end-to-end verification of Ollama startup
+### Task 3.4: Manual end-to-end Ollama smoke test (Mac only)
 
-This is a manual smoke test, not a bats test, because `ollama serve` is a real external process.
+This step requires Ollama on macOS. Skip in non-Mac environments.
 
-- [ ] **Step 1: Make sure no stray Ollama is running**
+- [ ] **Step 1: Reset state**
 
 Run: `pkill -f "ollama serve" || true`
 
 - [ ] **Step 2: Run sbx-up via the symlink**
 
 Run: `sbx-up`
-Expected stderr lines (in order):
+Expected stderr lines:
 ```
 LAN_IP=<your.lan.ip>
-First run — pulling qwen3.6:35b-a3b … (only on first run)
-OK so far (sandbox launch added in Phase 4)
+First run — pulling qwen3.6:35b-a3b…  (only on first run)
+OK so far (sbx policy + sandbox launch added in Phase 4)
 ```
-On subsequent runs, the "First run" line is absent.
 
-- [ ] **Step 3: Verify Ollama is reachable from the host**
+- [ ] **Step 3: Verify Ollama from the host**
 
 Run: `curl -s http://$(ipconfig getifaddr en0):11434/api/tags | jq '.'`
-Expected: JSON listing models. The qwen tag should be present after the first pull.
+Expected: JSON listing models, including the qwen tag after the first pull.
 
-- [ ] **Step 4: Verify ollama.log contains startup output**
+- [ ] **Step 4: Verify idempotency**
 
-Run: `tail -n 5 ~/.cache/agent-sandbox/ollama.log`
-Expected: Ollama startup logs.
+Run: `sbx-up` again.
+Expected: no "First run" line, no Ollama startup. Quick exit.
 
-- [ ] **Step 5: Re-run sbx-up to verify idempotency**
-
-Run: `sbx-up`
-Expected: skips the "First run" pull and Ollama startup (probe finds it already up).
-
-No commit for this task — it's pure verification, no code changes.
+No commit — verification only.
 
 ---
 
-## Phase 4: Network policy and sandbox launch
+## Phase 4: sbx policy update + sandbox launch
 
-End state: `sbx-up` writes a per-invocation network policy with the current LAN IP, then `exec`s `sbx run` with the workspace mounted and `LAN_IP` env injected. Inside the VM, the model endpoint is reachable; an out-of-allowlist host like `example.com` is denied.
+End state: `sbx-up` updates the global sbx policy with the current LAN IP, writes `${PWD}/.sbx/runtime.env`, and `exec`s `sbx run --template localhost:5000/agent-sandbox:latest shell`. Inside the VM, the model endpoint is reachable.
 
-### Task 4.1: Write network policy template
-
-**Files:**
-- Create: `policy/network.tmpl`
-
-- [ ] **Step 1: Write the template**
-
-The exact format depends on Task 0.3 research. Example assumes JSON, default-deny:
-
-```json
-{
-  "default": "deny",
-  "allow": [
-    { "host": "${LAN_IP}", "port": 11434, "proto": "tcp" },
-    { "host": "registry.npmjs.org", "port": 443 },
-    { "host": "pypi.org", "port": 443 },
-    { "host": "files.pythonhosted.org", "port": 443 },
-    { "host": "github.com", "port": 443 },
-    { "host": "objects.githubusercontent.com", "port": 443 },
-    { "host": "ghcr.io", "port": 443 },
-    { "host": "api.github.com", "port": 443 }
-  ]
-}
-```
-
-If `sbx`'s policy format is different (YAML, TOML, a flat allowlist file), adjust the structure accordingly using the format from your notes.
-
-- [ ] **Step 2: Verify the template is valid for whatever format sbx expects**
-
-If JSON: `jq . policy/network.tmpl` (after substituting the placeholder for a fake IP, since `${LAN_IP}` isn't valid JSON):
-```bash
-sed 's/${LAN_IP}/0.0.0.0/' policy/network.tmpl | jq .
-```
-Expected: pretty-printed JSON, exit 0.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add policy/network.tmpl
-git commit -m "feat: add network policy template"
-```
-
-### Task 4.2: Re-enable policy copy in Makefile and run setup
-
-**Files:**
-- Modify: `Makefile`
-
-- [ ] **Step 1: Un-comment the cp line**
-
-Change:
-```make
-	# cp $(REPO)/policy/network.tmpl $(CONFIG_DIR)/network.tmpl
-```
-to:
-```make
-	cp $(REPO)/policy/network.tmpl $(CONFIG_DIR)/network.tmpl
-```
-
-- [ ] **Step 2: Run setup**
-
-Run: `make setup`
-Expected: copies the template to `~/.config/agent-sandbox/network.tmpl`.
-
-- [ ] **Step 3: Verify**
-
-Run: `cat ~/.config/agent-sandbox/network.tmpl`
-Expected: matches the repo file.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add Makefile
-git commit -m "feat: enable policy template copy in make setup"
-```
-
-### Task 4.3: Add generate_policy function to sbx-up with test
+### Task 4.1: Add update_sbx_policy and write_runtime_env to sbx-up
 
 **Files:**
 - Modify: `bin/sbx-up`
-- Modify: `tests/sbx-up.bats`
 
-- [ ] **Step 1: Add the function to sbx-up**
-
-Insert after `ensure_model`:
+- [ ] **Step 1: Add the functions before main()**
 
 ```bash
-generate_policy() {
-  local ip="$1" template="$2" out="$3"
-  sed "s|\${LAN_IP}|${ip}|g" "$template" > "$out"
+update_sbx_policy() {
+  local ip="$1"
+  # `sbx policy allow network <host>:<port>` — confirm exact form via
+  # `sbx policy allow --help`. The command must be idempotent; re-running
+  # with the same host should be a no-op.
+  sbx policy allow network "${ip}:${OLLAMA_PORT}"
+}
+
+write_runtime_env() {
+  local ip="$1" workspace="$2"
+  mkdir -p "${workspace}/.sbx"
+  printf 'LAN_IP=%s\n' "$ip" > "${workspace}/.sbx/runtime.env"
 }
 ```
 
-- [ ] **Step 2: Append a test**
+- [ ] **Step 2: Verify it parses**
+
+Run: `bash -n bin/sbx-up`
+Expected: no output.
+
+- [ ] **Step 3: Add a bats test for write_runtime_env**
 
 Append to `tests/sbx-up.bats`:
 
 ```bash
-@test "generate_policy substitutes LAN_IP placeholder" {
+@test "write_runtime_env creates .sbx/runtime.env with LAN_IP" {
   local tmpdir; tmpdir=$(mktemp -d)
-  printf '{"host": "${LAN_IP}", "port": 11434}\n' > "$tmpdir/in.tmpl"
-
-  generate_policy "192.168.1.50" "$tmpdir/in.tmpl" "$tmpdir/out.json"
-  run cat "$tmpdir/out.json"
+  write_runtime_env "192.168.1.50" "$tmpdir"
+  run cat "$tmpdir/.sbx/runtime.env"
   [ "$status" -eq 0 ]
-  [ "$output" = '{"host": "192.168.1.50", "port": 11434}' ]
-
+  [ "$output" = "LAN_IP=192.168.1.50" ]
   rm -rf "$tmpdir"
 }
 ```
 
-- [ ] **Step 3: Run tests**
+- [ ] **Step 4: Run tests**
 
 Run: `bats tests/sbx-up.bats`
-Expected: all tests pass, including the new one.
+Expected: 6 tests pass.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add bin/sbx-up tests/sbx-up.bats
-git commit -m "feat: add generate_policy function with test"
+git commit -m "feat: add update_sbx_policy and write_runtime_env, with test"
 ```
 
-### Task 4.4: Wire generate_policy and sbx run into main()
+### Task 4.2: Wire policy update, runtime.env, and sbx run into main()
 
 **Files:**
 - Modify: `bin/sbx-up`
@@ -1040,328 +952,93 @@ Change the bottom of `main()` from:
 ```bash
   ensure_model
 
-  echo "OK so far (sandbox launch added in Phase 4)" >&2
+  echo "OK so far (sbx policy + sandbox launch added in Phase 4)" >&2
 }
 ```
 to:
 ```bash
   ensure_model
 
-  local policy="${CACHE_DIR}/network-current.json"
-  generate_policy "$ip" "${CONFIG_DIR}/network.tmpl" "$policy"
+  update_sbx_policy "$ip"
+  write_runtime_env "$ip" "$PWD"
 
   if [[ "${1:-}" == "--rebuild" ]]; then
     local repo
     repo=$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")
-    sbx build -t agent-sandbox "${repo}/image/"
+    docker build -t "$IMAGE" --push "${repo}/image/"
     shift
   fi
 
-  exec sbx run \
-    --image agent-sandbox \
-    --policy "$policy" \
-    --mount "$PWD:/workspace" \
-    --env "LAN_IP=$ip"
+  exec sbx run --template "$IMAGE" shell
 }
 ```
 
-Adjust the `sbx run` flags to match the actual flag names from Task 0.3. If `sbx` uses `-v` instead of `--mount`, swap. If env injection is `-e` instead of `--env`, swap.
+Adjust the `sbx run` invocation if the actual command form differs from what the docs show — e.g. if `shell` is positional vs. needs `--agent shell`.
 
-- [ ] **Step 2: Verify it parses**
+- [ ] **Step 2: Verify parses**
 
 Run: `bash -n bin/sbx-up`
 Expected: no output.
 
-- [ ] **Step 3: Run sbx-up from a test directory**
+- [ ] **Step 3: Run end-to-end (Mac only)**
 
 ```bash
 cd /tmp && mkdir -p sbx-test && cd sbx-test
 sbx-up
 ```
-Expected: drops you into a shell inside the VM. `pwd` returns `/workspace`. `echo $LAN_IP` returns your host's LAN IP. `pi --version` prints Pi's version.
+Expected: drops into a shell inside the VM. `pwd` returns `/workspace`. `cat /workspace/.sbx/runtime.env` shows `LAN_IP=<ip>`. `cat ~/.pi/agent/models.json` shows the rendered config.
 
-- [ ] **Step 4: Verify the model endpoint is reachable from inside the VM**
-
-Inside the VM:
-```bash
-curl -s "http://$LAN_IP:11434/api/tags" | head -c 200
-```
-Expected: JSON model list output.
-
-- [ ] **Step 5: Verify network policy denies non-allowlisted hosts**
+- [ ] **Step 4: Verify model reachability from VM**
 
 Inside the VM:
 ```bash
-curl -fsS --max-time 3 https://example.com >/dev/null && echo ALLOWED || echo DENIED
+curl -s "http://$(grep LAN_IP /workspace/.sbx/runtime.env | cut -d= -f2):11434/api/tags" | head -c 200
 ```
-Expected: `DENIED` (or a connection failure exit code).
+Expected: JSON model list.
 
-- [ ] **Step 6: Exit the sandbox**
-
-Inside the VM: `exit`
-Expected: returns to host shell. State is persisted by sbx; no cleanup needed.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add bin/sbx-up
-git commit -m "feat: wire policy generation and sbx run into sbx-up"
-```
-
-### Task 4.5: Add --rebuild smoke test
-
-- [ ] **Step 1: Make a trivial change to image/Dockerfile**
-
-Add a comment line at the end of `image/Dockerfile`:
-```dockerfile
-# rebuild marker
-```
-
-- [ ] **Step 2: Run sbx-up --rebuild**
-
-Run: `sbx-up --rebuild`
-Expected: runs `sbx build` first (visible output), then launches sandbox as normal.
-
-- [ ] **Step 3: Revert the Dockerfile change**
-
-Run: `git checkout image/Dockerfile`
-
-No commit needed — this was a verification, not a code change.
-
----
-
-## Phase 5: Entrypoint first-boot logic
-
-End state: every `sbx-up` re-renders `models.json` from the env var. If `/workspace/mise.toml` exists, `mise install` runs the first time and any time the file changes (hash-gated). Same for `/workspace/.sbx/postCreate.sh`.
-
-### Task 5.1: Write entrypoint skeleton with envsubst
-
-**Files:**
-- Create: `image/entrypoint.sh`
-
-- [ ] **Step 1: Write the script**
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-STATE_DIR="${HOME}/.sandbox"
-
-main() {
-  mkdir -p "$STATE_DIR"
-
-  # Render models.json from template using LAN_IP injected by sbx run.
-  if [[ -f /etc/agent-sandbox/models.json.tmpl ]]; then
-    : "${LAN_IP:?LAN_IP env var not set; sbx-up should pass it}"
-    mkdir -p "${HOME}/.config/pi"
-    envsubst < /etc/agent-sandbox/models.json.tmpl > "${HOME}/.config/pi/models.json"
-  fi
-
-  cd /workspace 2>/dev/null || cd "$HOME"
-  exec "${SHELL:-/bin/bash}" -l
-}
-
-# Allow sourcing for tests without running main.
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  main "$@"
-fi
-```
-
-If your Task 0.2 research showed Pi reads `PI_MODEL_ENDPOINT` env var instead, replace the `envsubst` block with:
-
-```bash
-export PI_MODEL_ENDPOINT="http://${LAN_IP}:11434"
-```
-
-and skip writing `models.json`.
-
-- [ ] **Step 2: Make it executable**
-
-Run: `chmod +x image/entrypoint.sh`
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add image/entrypoint.sh
-git commit -m "feat: add entrypoint with models.json rendering"
-```
-
-### Task 5.2: Wire entrypoint into Dockerfile
-
-**Files:**
-- Modify: `image/Dockerfile`
-
-- [ ] **Step 1: Append COPY and ENTRYPOINT**
-
-```dockerfile
-COPY entrypoint.sh /usr/local/bin/sandbox-entrypoint
-RUN chmod +x /usr/local/bin/sandbox-entrypoint
-
-ENTRYPOINT ["/usr/local/bin/sandbox-entrypoint"]
-```
-
-Note: `ENTRYPOINT` may interact with `sbx run`'s default behavior. If `sbx run` ignores the image's ENTRYPOINT in favor of its own, you may need to invoke the entrypoint via `sbx run --image agent-sandbox -- /usr/local/bin/sandbox-entrypoint`. Check your Task 0.3 research notes; adjust the `exec sbx run` line in `bin/sbx-up` if needed.
-
-- [ ] **Step 2: Rebuild image**
-
-Run: `sbx build -t agent-sandbox image/`
-Expected: builds successfully.
-
-- [ ] **Step 3: Run sbx-up from a test dir, verify models.json is rendered**
-
-```bash
-cd /tmp/sbx-test && sbx-up
-```
-Inside the VM:
-```bash
-cat ~/.config/pi/models.json
-```
-Expected: JSON content with `${LAN_IP}` substituted with your actual IP.
-
-Exit the VM.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add image/Dockerfile
-git commit -m "feat: wire entrypoint into image"
-```
-
-### Task 5.3: Add hash-gated mise install to entrypoint
-
-**Files:**
-- Modify: `image/entrypoint.sh`
-
-- [ ] **Step 1: Insert the hash-gated mise block inside `main()`, before the `cd /workspace` / `exec` lines**
-
-```bash
-  # Hash-gated `mise install` for /workspace/mise.toml.
-  if [[ -f /workspace/mise.toml ]]; then
-    new_hash=$(sha256sum /workspace/mise.toml | cut -c1-16)
-    old_hash=$(cat "${STATE_DIR}/mise.hash" 2>/dev/null || true)
-    if [[ "$new_hash" != "$old_hash" ]]; then
-      echo "==> mise.toml changed (or first run); installing toolchain" >&2
-      (cd /workspace && mise install)
-      echo "$new_hash" > "${STATE_DIR}/mise.hash"
-    fi
-  fi
-```
-
-- [ ] **Step 2: Rebuild image**
-
-Run: `sbx build -t agent-sandbox image/`
-
-- [ ] **Step 3: Verify on a project without mise.toml**
-
-```bash
-cd /tmp/sbx-test && sbx-up
-```
-Inside the VM: shouldn't see the "mise.toml changed" line. Exit.
-
-- [ ] **Step 4: Verify on a project with mise.toml**
-
-```bash
-cd /tmp && mkdir -p sbx-mise-test && cd sbx-mise-test
-cat > mise.toml <<'EOF'
-[tools]
-node = "20"
-EOF
-sbx-up
-```
-Inside the VM: should see "==> mise.toml changed (or first run); installing toolchain" and `mise install` output. Verify Node 20 is installed:
-```bash
-node --version
-```
-Expected: `v20.x.x`.
-
-Exit, run `sbx-up` again. Should NOT see the install line (hash matches).
-
-- [ ] **Step 5: Edit mise.toml, verify re-run**
-
-On the host:
-```bash
-cat > /tmp/sbx-mise-test/mise.toml <<'EOF'
-[tools]
-node = "22"
-EOF
-cd /tmp/sbx-mise-test && sbx-up
-```
-Inside the VM: should see install line. `node --version` reports `v22.x.x`. Exit.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add image/entrypoint.sh
-git commit -m "feat: hash-gated mise install in entrypoint"
-```
-
-### Task 5.4: Add hash-gated postCreate.sh to entrypoint
-
-**Files:**
-- Modify: `image/entrypoint.sh`
-
-- [ ] **Step 1: Insert the postCreate block inside `main()`, after the mise block**
-
-```bash
-  # Hash-gated /workspace/.sbx/postCreate.sh.
-  if [[ -f /workspace/.sbx/postCreate.sh ]]; then
-    new_hash=$(sha256sum /workspace/.sbx/postCreate.sh | cut -c1-16)
-    old_hash=$(cat "${STATE_DIR}/postcreate.hash" 2>/dev/null || true)
-    if [[ "$new_hash" != "$old_hash" ]]; then
-      echo "==> .sbx/postCreate.sh changed (or first run); running" >&2
-      bash /workspace/.sbx/postCreate.sh
-      echo "$new_hash" > "${STATE_DIR}/postcreate.hash"
-    fi
-  fi
-```
-
-- [ ] **Step 2: Rebuild image**
-
-Run: `sbx build -t agent-sandbox image/`
-
-- [ ] **Step 3: Verify with a sample postCreate.sh**
-
-On the host:
-```bash
-mkdir -p /tmp/sbx-mise-test/.sbx
-cat > /tmp/sbx-mise-test/.sbx/postCreate.sh <<'EOF'
-#!/usr/bin/env bash
-echo "postCreate ran at $(date)" >> ~/.postcreate.log
-EOF
-chmod +x /tmp/sbx-mise-test/.sbx/postCreate.sh
-cd /tmp/sbx-mise-test && sbx-up
-```
-Inside the VM:
-```bash
-cat ~/.postcreate.log
-```
-Expected: one line with a timestamp. Exit, run `sbx-up` again — should NOT re-run (hash matches), `~/.postcreate.log` still has one line.
-
-- [ ] **Step 4: Edit postCreate.sh, verify re-run**
-
-```bash
-echo '# bumped' >> /tmp/sbx-mise-test/.sbx/postCreate.sh
-cd /tmp/sbx-mise-test && sbx-up
-```
-Inside the VM: `cat ~/.postcreate.log` now has two lines.
+Exit: `exit`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add image/entrypoint.sh
-git commit -m "feat: hash-gated postCreate.sh in entrypoint"
+git add bin/sbx-up
+git commit -m "feat: wire sbx policy update, runtime.env, and sbx run into sbx-up"
 ```
 
-### Task 5.5: Add bats tests for entrypoint hash logic
+### Task 4.3: --rebuild smoke test (Mac only)
+
+- [ ] **Step 1: Add a trivial change**
+
+Append `# rebuild marker\n` to `image/Dockerfile`.
+
+- [ ] **Step 2: Run sbx-up --rebuild**
+
+Run: `sbx-up --rebuild`
+Expected: runs `docker build --push` first, then launches sandbox.
+
+- [ ] **Step 3: Revert**
+
+Run: `git checkout image/Dockerfile`
+
+No commit.
+
+---
+
+## Phase 5: setup.sh first-boot logic
+
+End state: `setup.sh` (sourced from profile.d on every shell startup) is idempotent, renders models.json, and runs hash-gated `mise install` and `postCreate.sh` from the workspace.
+
+### Task 5.1: Add hash-gated runner to setup.sh
 
 **Files:**
-- Create: `tests/entrypoint.bats`
+- Modify: `image/setup.sh`
 
-- [ ] **Step 1: Refactor entrypoint.sh to extract `run_hash_gated`**
+- [ ] **Step 1: Add `run_hash_gated` and call it twice inside the file**
 
-Replace the two duplicated blocks inside `main()` with a single helper. Define this function at file scope (above `main()`) so it's available when the script is sourced for testing:
+The existing setup.sh already loads runtime.env and renders models.json. Append (before the file's natural end):
 
 ```bash
+# Generic hash-gated runner. Re-runs `runner` only when `source` content changes.
 run_hash_gated() {
   local source="$1" hash_file="$2" label="$3" runner="$4"
   if [[ ! -f "$source" ]]; then return 0; fi
@@ -1374,29 +1051,82 @@ run_hash_gated() {
     echo "$new_hash" > "$hash_file"
   fi
 }
+
+run_hash_gated /workspace/mise.toml \
+  "${STATE_DIR}/mise.hash" "mise.toml" \
+  '(cd /workspace && mise install)'
+
+run_hash_gated /workspace/.sbx/postCreate.sh \
+  "${STATE_DIR}/postcreate.hash" ".sbx/postCreate.sh" \
+  'bash /workspace/.sbx/postCreate.sh'
 ```
 
-Replace the two inline blocks inside `main()` with:
+Important: `setup.sh` is sourced (not executed). The `SBX_SETUP_DONE` guard at the top of the file already prevents re-running on every subshell, but `run_hash_gated` itself is also fine to define multiple times.
+
+- [ ] **Step 2: Rebuild image**
+
+Run: `make setup` (which now does `docker build --push`).
+
+- [ ] **Step 3: Smoke test on a project with mise.toml (Mac only)**
 
 ```bash
-  run_hash_gated /workspace/mise.toml \
-    "${STATE_DIR}/mise.hash" "mise.toml" \
-    '(cd /workspace && mise install)'
-
-  run_hash_gated /workspace/.sbx/postCreate.sh \
-    "${STATE_DIR}/postcreate.hash" ".sbx/postCreate.sh" \
-    'bash /workspace/.sbx/postCreate.sh'
+cd /tmp && mkdir -p sbx-mise-test && cd sbx-mise-test
+cat > mise.toml <<'EOF'
+[tools]
+node = "20"
+EOF
+sbx-up
+```
+Inside the VM: should see `==> mise.toml changed (or first run); running`, then `mise install` output. Verify:
+```bash
+node --version   # v20.x.x
 ```
 
-The `BASH_SOURCE` guard added in Task 5.1 already ensures sourcing for tests doesn't run `main()`, so the `run_hash_gated` function is exposed cleanly.
+Exit, run `sbx-up` again. Should not see the install line on second boot.
 
-- [ ] **Step 2: Write the bats file**
+- [ ] **Step 4: Smoke test edit-triggers-rerun (Mac only)**
+
+```bash
+cat > /tmp/sbx-mise-test/mise.toml <<'EOF'
+[tools]
+node = "22"
+EOF
+cd /tmp/sbx-mise-test && sbx-up
+```
+Inside: should see install line; `node --version` reports v22.
+
+- [ ] **Step 5: Smoke test postCreate.sh (Mac only)**
+
+```bash
+mkdir -p /tmp/sbx-mise-test/.sbx
+cat > /tmp/sbx-mise-test/.sbx/postCreate.sh <<'EOF'
+#!/usr/bin/env bash
+echo "ran at $(date)" >> ~/.postcreate.log
+EOF
+chmod +x /tmp/sbx-mise-test/.sbx/postCreate.sh
+cd /tmp/sbx-mise-test && sbx-up
+```
+Inside: `cat ~/.postcreate.log` shows one line. Exit, `sbx-up` again — still one line. Edit the script (e.g. `echo bumped >> /tmp/sbx-mise-test/.sbx/postCreate.sh`), re-run — log now has two lines.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add image/setup.sh
+git commit -m "feat: hash-gated mise install and postCreate.sh in setup.sh"
+```
+
+### Task 5.2: Bats tests for run_hash_gated
+
+**Files:**
+- Create: `tests/setup.bats`
+
+- [ ] **Step 1: Write the tests**
 
 ```bash
 #!/usr/bin/env bats
 
 setup() {
-  source "${BATS_TEST_DIRNAME}/../image/entrypoint.sh"
+  source "${BATS_TEST_DIRNAME}/../image/setup.sh"
   WORKDIR=$(mktemp -d)
 }
 
@@ -1441,98 +1171,82 @@ teardown() {
 }
 ```
 
-- [ ] **Step 3: Run tests**
+Note: this depends on `setup.sh` being sourceable without side effects beyond defining functions. `setup.sh` has the `SBX_SETUP_DONE` guard plus a `return 0` if `LAN_IP` isn't set, so sourcing in the bats environment (where neither is set) just exits the `if` blocks early and the function definitions remain. Verify this by hand if tests fail unexpectedly.
 
-Run: `bats tests/entrypoint.bats`
-Expected: all 4 tests pass.
+- [ ] **Step 2: Run tests**
 
-- [ ] **Step 4: Commit**
+Run: `bats tests/setup.bats`
+Expected: 4 tests pass.
+
+- [ ] **Step 3: Commit**
 
 ```bash
-git add image/entrypoint.sh tests/entrypoint.bats
-git commit -m "test: refactor entrypoint to expose run_hash_gated and add tests"
+git add tests/setup.bats
+git commit -m "test: bats tests for run_hash_gated in setup.sh"
 ```
 
 ---
 
-## Phase 6: End-to-end verification and README
+## Phase 6: End-to-end and README
 
-End state: a real run of Pi inside the sandbox successfully gets a response from Qwen via the host Ollama. README documents the basic usage.
+### Task 6.1: End-to-end smoke (Mac only)
 
-### Task 6.1: End-to-end smoke test
+This is manual verification. No code changes.
 
-This is a manual verification, no code changes.
+- [ ] **Step 1: Clean state**
 
-- [ ] **Step 1: Reset to a clean state**
-
-Run on the host:
 ```bash
 pkill -f "ollama serve" || true
 rm -rf /tmp/sbx-e2e
-mkdir -p /tmp/sbx-e2e
-cd /tmp/sbx-e2e
-git init -q
-echo "# test repo" > README.md
-git add README.md && git commit -q -m "init"
+mkdir -p /tmp/sbx-e2e && cd /tmp/sbx-e2e
+git init -q && echo "# test" > README.md && git add . && git commit -q -m init
+echo ".sbx/runtime.env" > .gitignore && git add .gitignore && git commit -q -m gitignore
 ```
 
 - [ ] **Step 2: Launch sbx-up**
 
 Run: `sbx-up`
-Expected: discovers LAN IP, starts Ollama (logs go to `~/.cache/agent-sandbox/ollama.log`), confirms model present, generates network policy, drops you into a shell at `/workspace`.
+Expected: full flow — LAN IP discovered, Ollama up, model present, sbx policy updated, runtime.env written, sandbox launched.
 
-- [ ] **Step 3: Verify Pi can reach the model**
-
-Inside the VM:
-```bash
-curl -fsS "http://$LAN_IP:11434/api/tags" | jq '.models[].name'
-```
-Expected: includes the qwen tag.
-
-- [ ] **Step 4: Run a Pi prompt**
+- [ ] **Step 3: Verify Pi hits the model**
 
 Inside the VM:
 ```bash
 echo "Say 'hello from sbx' and nothing else." | pi
 ```
-(Adjust the invocation to match Pi's actual CLI surface from your notes — may be `pi prompt`, `pi run`, or a flag like `pi -p`.)
+(Substitute the actual Pi invocation form — `pi prompt`, `pi run`, etc. — confirmed via `pi --help`.)
 
-Expected: Pi responds with text containing "hello from sbx" or similar. The response comes from Qwen via host Ollama.
+Expected: a response that includes "hello from sbx" or similar. The response comes from Qwen via host Ollama.
 
-- [ ] **Step 5: Verify state persistence**
+- [ ] **Step 4: Verify state persistence**
 
-Inside the VM:
 ```bash
-echo "test marker $(date)" > ~/.persistence-check
+echo "marker $(date)" > ~/.persistence-check
 exit
 ```
 
-Run `sbx-up` from `/tmp/sbx-e2e` again. Inside the VM:
+Re-run `sbx-up` from `/tmp/sbx-e2e`. Inside the VM:
 ```bash
 cat ~/.persistence-check
 ```
-Expected: the timestamp from the previous run.
+Expected: the timestamp from the previous boot.
 
-- [ ] **Step 6: Verify cross-workspace isolation**
+- [ ] **Step 5: Verify cross-workspace isolation**
 
 ```bash
 exit
 mkdir -p /tmp/sbx-other && cd /tmp/sbx-other && sbx-up
 ```
-Inside the VM:
-```bash
-ls ~/.persistence-check 2>&1 || echo "isolated"
-```
-Expected: `isolated` (file from the other workspace's state is not visible).
+Inside: `ls ~/.persistence-check 2>&1 || echo isolated` — expect `isolated`.
 
-Exit. No commit — this was verification.
+Exit. No commit.
 
-### Task 6.2: Write the README
+### Task 6.2: README
 
 **Files:**
 - Create: `README.md`
 
-- [ ] **Step 1: Write a minimal README**
+- [ ] **Step 1: Write the README**
 
 ```markdown
 # agent-sandbox
@@ -1541,40 +1255,45 @@ Personal infra: Pi running in an sbx microVM, talking to Qwen served by host Oll
 
 ## Setup (once)
 
+Pre-requisites: a working Docker (Desktop or colima), and `sbx login` already done.
+
 ```
 make setup
 ```
 
-Installs host deps via Homebrew, builds the sandbox image, drops a network policy template in `~/.config/agent-sandbox/`, and symlinks `sbx-up` into `~/.local/bin/`. If `~/.local/bin` isn't on your `PATH`, the printed instructions tell you how to add it.
+Installs host deps via Homebrew, starts a local Docker registry on `localhost:5000`, builds and pushes the sandbox image, and symlinks `sbx-up` into `~/.local/bin/`. If `~/.local/bin` isn't on `$PATH`, the printed instructions tell you how to add it.
 
 ## Daily use
 
-From any project directory on the host:
+From any project directory:
 
 ```
 sbx-up
 ```
 
-This:
+What it does:
 1. Discovers your current LAN IP.
-2. Starts Ollama bound to it (if not already running).
+2. Starts Ollama on the host bound to that IP if not already running.
 3. Pulls the Qwen model on first run.
-4. Generates a per-invocation network policy.
-5. Drops you into a shell inside the sandbox, with the project mounted at `/workspace` and `pi` on `$PATH`.
+4. Adds `<lan-ip>:11434` to the global sbx network policy.
+5. Writes `${PWD}/.sbx/runtime.env` with the LAN IP (the in-VM `setup.sh` reads it).
+6. Drops you into a shell inside the sandbox; `pi` is on `$PATH`, project mounted at `/workspace`.
 
-Use `sbx-up --rebuild` to rebuild the image (e.g. after editing `image/Dockerfile`).
+Use `sbx-up --rebuild` after editing `image/Dockerfile`.
+
+**Tip:** add `.sbx/runtime.env` to your project's `.gitignore`.
 
 ## Per-project setup
 
-- `mise.toml` at the workspace root: toolchain installed automatically on first boot. Re-runs on edit.
-- `.sbx/postCreate.sh` at the workspace root: runs once per workspace, re-runs on edit. Make it idempotent.
+- `mise.toml` at the workspace root — toolchain installed automatically on first boot, re-runs on edit.
+- `.sbx/postCreate.sh` at the workspace root — runs once per workspace, re-runs on edit. Make it idempotent.
 
 ## Files of interest
 
 - `bin/sbx-up` — the launcher.
-- `image/Dockerfile` — the sandbox image.
-- `image/entrypoint.sh` — first-boot logic inside the VM.
-- `policy/network.tmpl` — outbound network allowlist (default-deny).
+- `image/Dockerfile` — extends `docker/sandbox-templates:shell`, pre-installs Pi.
+- `image/setup.sh` — sourced via `/etc/profile.d` inside the VM on every shell startup.
+- `Makefile` — host setup (`make setup`).
 
 See `docs/superpowers/specs/2026-05-05-agent-sandbox-design.md` for the full design.
 ```
@@ -1593,20 +1312,12 @@ git commit -m "docs: add README"
 Run: `bats tests/`
 Expected: all tests pass.
 
-- [ ] **Step 2: Run shellcheck on all bash**
+- [ ] **Step 2: Shellcheck**
 
-Run: `shellcheck bin/sbx-up image/entrypoint.sh`
-(Install via `brew install shellcheck` if not already present.)
-Expected: no errors. Warnings are OK; address obvious ones, ignore stylistic ones.
+Run: `shellcheck bin/sbx-up image/setup.sh`
+Expected: no errors. Address obvious warnings; ignore stylistic ones.
 
-- [ ] **Step 3: Verify make setup is fully idempotent on a clean checkout**
-
-```bash
-cd $(mktemp -d) && git clone <this-repo> agent-sandbox && cd agent-sandbox && make setup
-```
-Expected: completes cleanly, all steps run.
-
-- [ ] **Step 4: Verify final tree**
+- [ ] **Step 3: Verify file tree**
 
 Run: `git ls-files | sort`
 Expected files include:
@@ -1621,20 +1332,19 @@ docs/superpowers/plans/2026-05-05-agent-sandbox.md
 docs/superpowers/specs/2026-05-05-agent-sandbox-design.md
 image/AGENTS.md
 image/Dockerfile
-image/entrypoint.sh
 image/models.json
-policy/network.tmpl
-tests/entrypoint.bats
+image/setup.sh
+tests/setup.bats
 tests/sbx-up.bats
 ```
 
-No commit — this is verification only.
+No commit.
 
 ---
 
-## Self-review notes (for the engineer)
+## Notes for the engineer
 
-- Phase 0 outputs feed Phases 2 and 5. Don't skip it; the placeholders below ("if Pi is npm…", "if Pi reads env var…") collapse into one concrete answer once research is done.
-- Tasks that say "adjust the flag if your sbx differs" mean exactly that — `sbx`'s flag surface is one of the open questions. Read your notes; don't guess from this plan.
-- Each phase ends in a verifiable state. If a verification step fails, do not move to the next phase. Diagnose first.
-- The `--rebuild` flag is a bonus convenience. If it's a pain to wire, drop it and tell the user to run `sbx build -t agent-sandbox image/` directly.
+- Phase 0 outputs (`docs/superpowers/notes/research-notes.md`) cover Pi specifics. Refer to it whenever a task says "confirm at impl time."
+- `sbx login` is a one-time human action; it's not in `make setup` because it's interactive.
+- "Mac only" verification steps require macOS + Docker + sbx + ollama installed. Skip them in CI / Linux dev environments.
+- If a verification step fails, do not skip ahead. Diagnose first.
