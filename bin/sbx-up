@@ -1,5 +1,90 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "sbx-up: not yet implemented (Phase 1 stub)" >&2
-exit 0
+# Constants. Edit here to change them.
+MODEL_TAG="qwen3.6:35b-a3b"   # confirm exact tag from research-notes.md
+OLLAMA_PORT=11434
+IMAGE="localhost:5000/agent-sandbox:latest"
+CACHE_DIR="${HOME}/.cache/agent-sandbox"
+
+discover_lan_ip() {
+  local ip
+  ip=$(ipconfig getifaddr en0 2>/dev/null || true)
+  [[ -z "$ip" ]] && ip=$(ipconfig getifaddr en1 2>/dev/null || true)
+  [[ -z "$ip" ]] && return 1
+  echo "$ip"
+}
+
+ollama_is_up() {
+  local ip="$1"
+  curl -fsS --max-time 1 "http://${ip}:${OLLAMA_PORT}/api/tags" >/dev/null 2>&1
+}
+
+start_ollama() {
+  local ip="$1"
+  mkdir -p "$CACHE_DIR"
+  OLLAMA_HOST="${ip}:${OLLAMA_PORT}" nohup ollama serve \
+    > "${CACHE_DIR}/ollama.log" 2>&1 &
+  for _ in $(seq 1 30); do
+    ollama_is_up "$ip" && return 0
+    sleep 0.5
+  done
+  return 1
+}
+
+ensure_model() {
+  if ollama list | awk 'NR>1 {print $1}' | grep -qx "$MODEL_TAG"; then
+    return 0
+  fi
+  echo "First run — pulling $MODEL_TAG (large download)…" >&2
+  ollama pull "$MODEL_TAG"
+}
+
+update_sbx_policy() {
+  local ip="$1"
+  # `sbx policy allow network <host>:<port>`. Idempotent — re-running with
+  # the same host should be a no-op. Confirm exact form via
+  # `sbx policy allow --help` if this fails on first run.
+  sbx policy allow network "${ip}:${OLLAMA_PORT}"
+}
+
+write_runtime_env() {
+  local ip="$1" workspace="$2"
+  mkdir -p "${workspace}/.sbx"
+  printf 'LAN_IP=%s\n' "$ip" > "${workspace}/.sbx/runtime.env"
+}
+
+main() {
+  local ip
+  ip=$(discover_lan_ip) || {
+    echo "No LAN IP on en0/en1. On VPN? Cable unplugged?" >&2
+    exit 1
+  }
+  echo "LAN_IP=$ip" >&2
+
+  if ! ollama_is_up "$ip"; then
+    start_ollama "$ip" || {
+      echo "Ollama failed to start. Last log lines:" >&2
+      tail -n 20 "${CACHE_DIR}/ollama.log" >&2
+      exit 1
+    }
+  fi
+
+  ensure_model
+  update_sbx_policy "$ip"
+  write_runtime_env "$ip" "$PWD"
+
+  if [[ "${1:-}" == "--rebuild" ]]; then
+    local repo
+    repo=$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")
+    docker build -t "$IMAGE" --push "${repo}/image/"
+    shift
+  fi
+
+  exec sbx run --template "$IMAGE" shell
+}
+
+# Allow sourcing for tests without running main.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
